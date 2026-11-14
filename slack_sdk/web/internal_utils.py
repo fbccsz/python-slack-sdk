@@ -332,6 +332,9 @@ def _remove_none_values(d: dict) -> dict:
     return {k: v for k, v in d.items() if v is not None}
 
 
+_MAX_FILE_UPLOAD_SIZE = 1024 * 1024 * 1024
+
+
 def _to_v2_file_upload_item(upload_file: Dict[str, Any]) -> Dict[str, Optional[Any]]:
     file = upload_file.get("file")
     content = upload_file.get("content")
@@ -368,13 +371,19 @@ def _to_v2_file_upload_item(upload_file: Dict[str, Any]) -> Dict[str, Optional[A
     if data is None:
         raise SlackRequestError(f"File content not found for filename: {filename}, title: {title}")
 
+    length = len(data)
+    if length > _MAX_FILE_UPLOAD_SIZE:
+        raise SlackRequestError(
+            f"File exceeds Slack's 1 GB upload limit ({length} bytes; maximum {_MAX_FILE_UPLOAD_SIZE} bytes)."
+        )
+
     if title is None:
         title = filename  # to be consistent with files.upload API
 
     return {
         "filename": filename,
         "data": data,
-        "length": len(data),
+        "length": length,
         "title": title,
         "alt_txt": upload_file.get("alt_txt"),
         "highlight_type": upload_file.get("highlight_type"),

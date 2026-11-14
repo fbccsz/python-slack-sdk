@@ -2,8 +2,11 @@ import json
 import unittest
 from io import BytesIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Dict
+from unittest.mock import patch
 
+from slack_sdk.errors import SlackRequestError
 from slack_sdk.models.attachments import Attachment
 from slack_sdk.models.blocks import Block, DividerBlock
 from slack_sdk.models.messages.chunk import MarkdownTextChunk, PlanUpdateChunk, TaskUpdateChunk
@@ -132,6 +135,37 @@ class TestInternalUtils(unittest.TestCase):
         assert file_io_item.get("filename") == "Uploaded file"
         file_io_item = _to_v2_file_upload_item({"file": file_io, "filename": "foo.txt"})
         assert file_io_item.get("filename") == "foo.txt"
+
+    def test_to_v2_file_upload_item_size_limit(self):
+        with patch("slack_sdk.web.internal_utils._MAX_FILE_UPLOAD_SIZE", 4, create=True):
+            for data in (b"", b"abc", b"abcd"):
+                for key in ("file", "content"):
+                    with self.subTest(key=key, data=data):
+                        item = _to_v2_file_upload_item({key: data})
+                        self.assertEqual(item["length"], len(data))
+                        self.assertEqual(item["data"], data)
+            for key in ("file", "content"):
+                with self.subTest(key=key):
+                    with self.assertRaisesRegex(SlackRequestError, "1 GB upload limit"):
+                        _to_v2_file_upload_item({key: b"abcde"})
+
+    def test_to_v2_file_upload_item_size_limit_uses_utf8_bytes(self):
+        with patch("slack_sdk.web.internal_utils._MAX_FILE_UPLOAD_SIZE", 4, create=True):
+            self.assertEqual(_to_v2_file_upload_item({"content": "éé"})["length"], 4)
+            with self.assertRaisesRegex(SlackRequestError, "1 GB upload limit"):
+                _to_v2_file_upload_item({"content": "ééé"})
+
+    def test_to_v2_file_upload_item_size_limit_for_paths_and_streams(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "upload.bin"
+            path.write_bytes(b"abcd")
+            with patch("slack_sdk.web.internal_utils._MAX_FILE_UPLOAD_SIZE", 4, create=True):
+                for file in (path, str(path), BytesIO(b"abcd")):
+                    self.assertEqual(_to_v2_file_upload_item({"file": file})["length"], 4)
+                path.write_bytes(b"abcde")
+                for file in (path, str(path), BytesIO(b"abcde")):
+                    with self.assertRaisesRegex(SlackRequestError, "1 GB upload limit"):
+                        _to_v2_file_upload_item({"file": file})
 
     def test_to_v2_file_upload_item_passes_through_highlight_type(self):
         item = _to_v2_file_upload_item({"content": "test", "filename": "image.png", "highlight_type": "png"})
